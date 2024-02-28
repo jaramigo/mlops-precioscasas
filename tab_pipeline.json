@@ -1,0 +1,284 @@
+{
+  "pipelineSpec": {
+    "components": {
+      "comp-deploy-randomforest-model": {
+        "executorLabel": "exec-deploy-randomforest-model",
+        "inputDefinitions": {
+          "artifacts": {
+            "model": {
+              "artifactType": {
+                "schemaTitle": "system.Model",
+                "schemaVersion": "0.0.1"
+              }
+            }
+          },
+          "parameters": {
+            "project_id": {
+              "type": "STRING"
+            }
+          }
+        },
+        "outputDefinitions": {
+          "artifacts": {
+            "vertex_endpoint": {
+              "artifactType": {
+                "schemaTitle": "system.Artifact",
+                "schemaVersion": "0.0.1"
+              }
+            },
+            "vertex_model": {
+              "artifactType": {
+                "schemaTitle": "system.Model",
+                "schemaVersion": "0.0.1"
+              }
+            }
+          }
+        }
+      },
+      "comp-export-dataset": {
+        "executorLabel": "exec-export-dataset",
+        "inputDefinitions": {
+          "parameters": {
+            "dataset_id": {
+              "type": "STRING"
+            },
+            "project_id": {
+              "type": "STRING"
+            },
+            "view_name": {
+              "type": "STRING"
+            }
+          }
+        },
+        "outputDefinitions": {
+          "artifacts": {
+            "dataset": {
+              "artifactType": {
+                "schemaTitle": "system.Dataset",
+                "schemaVersion": "0.0.1"
+              }
+            }
+          }
+        }
+      },
+      "comp-randomforest-training": {
+        "executorLabel": "exec-randomforest-training",
+        "inputDefinitions": {
+          "artifacts": {
+            "dataset": {
+              "artifactType": {
+                "schemaTitle": "system.Dataset",
+                "schemaVersion": "0.0.1"
+              }
+            }
+          }
+        },
+        "outputDefinitions": {
+          "artifacts": {
+            "metrics": {
+              "artifactType": {
+                "schemaTitle": "system.Metrics",
+                "schemaVersion": "0.0.1"
+              }
+            },
+            "model": {
+              "artifactType": {
+                "schemaTitle": "system.Model",
+                "schemaVersion": "0.0.1"
+              }
+            }
+          }
+        }
+      }
+    },
+    "deploymentSpec": {
+      "executors": {
+        "exec-deploy-randomforest-model": {
+          "container": {
+            "args": [
+              "--executor_input",
+              "{{$}}",
+              "--function_to_execute",
+              "deploy_randomforest_model"
+            ],
+            "command": [
+              "sh",
+              "-c",
+              "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet     --no-warn-script-location 'google-cloud-aiplatform==1.25.0' 'kfp==1.8.22' && \"$0\" \"$@\"\n",
+              "sh",
+              "-ec",
+              "program_path=$(mktemp -d)\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\npython3 -m kfp.v2.components.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+              "\nimport kfp\nfrom kfp.v2 import dsl\nfrom kfp.v2.dsl import *\nfrom typing import *\n\ndef deploy_randomforest_model(\n    model: Input[Model],\n    project_id: str,\n    vertex_endpoint: Output[Artifact],\n    vertex_model: Output[Model],\n):\n    \"\"\"Deploys an XGBoost model to Vertex AI Endpoint.\n\n    Args:\n        model: The model to deploy.\n        project_id: The project ID of the Vertex AI Endpoint.\n\n    Returns:\n        vertex_endpoint: The deployed Vertex AI Endpoint.\n        vertex_model: The deployed Vertex AI Model.\n    \"\"\"\n    from google.cloud import aiplatform\n\n    aiplatform.init(project=project_id)\n\n    deployed_model = aiplatform.Model.upload(\n        display_name=\"precio-casas-model\",\n        artifact_uri=model.uri,\n        serving_container_image_uri=\"us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-0:latest\",\n    )\n#    endpoint = deployed_model.deploy(machine_type=\"n1-standard-4\")\n    endpoint = deployed_model.deploy(machine_type=\"e2-standard-2\")\n\n    vertex_endpoint.uri = endpoint.resource_name\n    vertex_model.uri = deployed_model.resource_name\n\n"
+            ],
+            "image": "python:3.7"
+          }
+        },
+        "exec-export-dataset": {
+          "container": {
+            "args": [
+              "--executor_input",
+              "{{$}}",
+              "--function_to_execute",
+              "export_dataset"
+            ],
+            "command": [
+              "sh",
+              "-c",
+              "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet     --no-warn-script-location 'google-cloud-bigquery[pandas]==3.10.0' 'kfp==1.8.22' && \"$0\" \"$@\"\n",
+              "sh",
+              "-ec",
+              "program_path=$(mktemp -d)\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\npython3 -m kfp.v2.components.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+              "\nimport kfp\nfrom kfp.v2 import dsl\nfrom kfp.v2.dsl import *\nfrom typing import *\n\ndef export_dataset(\n    project_id: str,\n    dataset_id: str,\n    view_name: str,\n    dataset: Output[Dataset],\n):\n    \"\"\"Exports from BigQuery to a CSV file.\n\n    Args:\n        project_id: The Project ID.\n        dataset_id: The BigQuery Dataset ID. Must be pre-created in the project.\n        view_name: The BigQuery view name.\n\n    Returns:\n        dataset: The Dataset artifact with exported CSV file.\n    \"\"\"\n    from google.cloud import bigquery\n\n    client = bigquery.Client(project=project_id)\n\n    table_name = f\"{project_id}.{dataset_id}.{view_name}\"\n    query = \"\"\"\n    SELECT\n      *\n    FROM\n      `{table_name}`\n    LIMIT 100\n    \"\"\".format(\n        table_name=table_name\n    )\n\n    job_config = bigquery.QueryJobConfig()\n    query_job = client.query(query=query, job_config=job_config)\n    df = query_job.result().to_dataframe()\n    df.to_csv(dataset.path, index=False)\n\n"
+            ],
+            "image": "python:3.7"
+          }
+        },
+        "exec-randomforest-training": {
+          "container": {
+            "args": [
+              "--executor_input",
+              "{{$}}",
+              "--function_to_execute",
+              "randomforest_training"
+            ],
+            "command": [
+              "sh",
+              "-c",
+              "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet     --no-warn-script-location 'xgboost==1.6.2' 'pandas==1.3.5' 'joblib==1.1.0' 'scikit-learn==1.0.2' 'gcsfs==2021.11.1' 'kfp==1.8.22' && \"$0\" \"$@\"\n",
+              "sh",
+              "-ec",
+              "program_path=$(mktemp -d)\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\npython3 -m kfp.v2.components.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+              "\nimport kfp\nfrom kfp.v2 import dsl\nfrom kfp.v2.dsl import *\nfrom typing import *\n\ndef randomforest_training(\n    dataset: Input[Dataset],\n    model: Output[Model],\n    metrics: Output[Metrics],\n):\n    \"\"\"Trains an XGBoost classifier.\n\n    Args:\n        dataset: The training dataset.\n\n    Returns:\n        model: The model artifact stores the model.joblib file.\n        metrics: The metrics of the trained model.\n    \"\"\"\n    import os\n    import joblib\n    import xgboost as xgb\n    from sklearn.metrics import (accuracy_score, precision_recall_curve,\n                                 roc_auc_score)\n    from sklearn.model_selection import (RandomizedSearchCV, StratifiedKFold,\n                                         train_test_split)\n    from sklearn.preprocessing import LabelEncoder\n\n    import pandas as pd\n    from sklearn.ensemble import RandomForestRegressor\n\n    # Load the training dataset\n    with open(dataset.path, \"r\") as train_data:\n        housing = pd.read_csv(train_data)\n\n    #housing = pd.read_csv('./Data/ames_housing.csv')\n    #housing.drop(['Unnamed: 0'], axis = 'columns', inplace=True)\n\n\n    numerics = ['int16', 'int32', 'int64', 'float16', 'float32', 'float64']\n    housing = housing.select_dtypes(include=numerics)\n    housing.drop(['Longitude','Latitude'], axis = 'columns', inplace=True)\n\n    housing_X = housing.drop(['Sale_Price'],axis = 'columns')\n    housing_y = housing.Sale_Price\n\n    train_reg_X, test_reg_X, train_reg_y, test_reg_y = train_test_split(housing_X,housing_y, test_size=0.2)\n\n    rf_regressor = RandomForestRegressor()\n    rf_regressor.fit(train_reg_X,train_reg_y)\n    pred_values_rf_reg = rf_regressor.predict(test_reg_X)\n\n    rf_regressor.score(test_reg_X,test_reg_y)\n\n    #metrics.log_metric(\"accuracy\", (score * 100.0))\n    #metrics.log_metric(\"framework\", \"xgboost\")\n    #metrics.log_metric(\"dataset_size\", len(raw_data))\n    #metrics.log_metric(\"AUC\", auc)\n\n    # Export the model to a file\n    os.makedirs(model.path, exist_ok=True)\n    joblib.dump(rf_regressor, os.path.join(model.path, \"model.joblib\"))\n\n"
+            ],
+            "image": "python:3.7"
+          }
+        }
+      }
+    },
+    "pipelineInfo": {
+      "name": "precioscasas-pipeline"
+    },
+    "root": {
+      "dag": {
+        "outputs": {
+          "artifacts": {
+            "randomforest-training-metrics": {
+              "artifactSelectors": [
+                {
+                  "outputArtifactKey": "metrics",
+                  "producerSubtask": "randomforest-training"
+                }
+              ]
+            }
+          }
+        },
+        "tasks": {
+          "deploy-randomforest-model": {
+            "cachingOptions": {
+              "enableCache": true
+            },
+            "componentRef": {
+              "name": "comp-deploy-randomforest-model"
+            },
+            "dependentTasks": [
+              "randomforest-training"
+            ],
+            "inputs": {
+              "artifacts": {
+                "model": {
+                  "taskOutputArtifact": {
+                    "outputArtifactKey": "model",
+                    "producerTask": "randomforest-training"
+                  }
+                }
+              },
+              "parameters": {
+                "project_id": {
+                  "runtimeValue": {
+                    "constantValue": {
+                      "stringValue": "mds-mlops2024"
+                    }
+                  }
+                }
+              }
+            },
+            "taskInfo": {
+              "name": "deploy-randomforest-model"
+            }
+          },
+          "export-dataset": {
+            "cachingOptions": {},
+            "componentRef": {
+              "name": "comp-export-dataset"
+            },
+            "inputs": {
+              "parameters": {
+                "dataset_id": {
+                  "runtimeValue": {
+                    "constantValue": {
+                      "stringValue": "houses"
+                    }
+                  }
+                },
+                "project_id": {
+                  "runtimeValue": {
+                    "constantValue": {
+                      "stringValue": "mds-mlops2024"
+                    }
+                  }
+                },
+                "view_name": {
+                  "runtimeValue": {
+                    "constantValue": {
+                      "stringValue": "house_data"
+                    }
+                  }
+                }
+              }
+            },
+            "taskInfo": {
+              "name": "export-dataset"
+            }
+          },
+          "randomforest-training": {
+            "cachingOptions": {
+              "enableCache": true
+            },
+            "componentRef": {
+              "name": "comp-randomforest-training"
+            },
+            "dependentTasks": [
+              "export-dataset"
+            ],
+            "inputs": {
+              "artifacts": {
+                "dataset": {
+                  "taskOutputArtifact": {
+                    "outputArtifactKey": "dataset",
+                    "producerTask": "export-dataset"
+                  }
+                }
+              }
+            },
+            "taskInfo": {
+              "name": "randomforest-training"
+            }
+          }
+        }
+      },
+      "outputDefinitions": {
+        "artifacts": {
+          "randomforest-training-metrics": {
+            "artifactType": {
+              "schemaTitle": "system.Metrics",
+              "schemaVersion": "0.0.1"
+            }
+          }
+        }
+      }
+    },
+    "schemaVersion": "2.0.0",
+    "sdkVersion": "kfp-1.8.22"
+  },
+  "runtimeConfig": {}
+}
